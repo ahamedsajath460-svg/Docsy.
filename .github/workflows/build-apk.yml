@@ -52,20 +52,24 @@ jobs:
       - name: Prepare signing key (from repository secrets)
         env:
           KS_B64: ${{ secrets.KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KS_KEYPASS: ${{ secrets.KEY_PASSWORD }}
         run: |
+          # Pasted secrets often carry hidden spaces/newlines/non-ASCII characters: strip them.
+          clean() { printf '%s' "$1" | LC_ALL=C tr -cd 'A-Za-z0-9'; }
           if [ -n "$KS_B64" ]; then
-            echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/docsy-release.jks"
+            printf '%s' "$KS_B64" | LC_ALL=C tr -cd 'A-Za-z0-9+/=' | base64 -d > "$RUNNER_TEMP/docsy-release.jks"
             echo "KEYSTORE_FILE=$RUNNER_TEMP/docsy-release.jks" >> "$GITHUB_ENV"
+            echo "KEYSTORE_PASSWORD=$(clean "$KS_PASS")" >> "$GITHUB_ENV"
+            echo "KEY_ALIAS=$(clean "$KS_ALIAS")" >> "$GITHUB_ENV"
+            echo "KEY_PASSWORD=$(clean "$KS_KEYPASS")" >> "$GITHUB_ENV"
           else
             echo "::warning::KEYSTORE_BASE64 secret not set - release APK will be debug-signed"
           fi
 
       - name: Build release + debug APK
         working-directory: ${{ env.PROJ }}
-        env:
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           chmod +x gradlew
           ./gradlew assembleRelease assembleDebug --no-daemon --stacktrace
