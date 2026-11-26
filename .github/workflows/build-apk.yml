@@ -1,4 +1,4 @@
-name: Build Docsy APK
+name: Build Doxsy APK
 
 # Upload (commit) a project .zip to the repo, or push the project files directly.
 # This workflow unzips the newest uploaded zip, builds signed APKs and publishes them
@@ -54,36 +54,67 @@ jobs:
           KS_B64: ${{ secrets.KEYSTORE_BASE64 }}
           KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
           KS_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KS_KEYPASS: ${{ secrets.KEY_PASSWORD }}
         run: |
           # Pasted secrets often carry hidden spaces/newlines/non-ASCII characters: strip them.
           clean() { printf '%s' "$1" | LC_ALL=C tr -cd 'A-Za-z0-9'; }
-          if [ -n "$KS_B64" ]; then
-            printf '%s' "$KS_B64" | LC_ALL=C tr -cd 'A-Za-z0-9+/=' | base64 -d > "$RUNNER_TEMP/docsy-release.jks"
-            echo "KEYSTORE_FILE=$RUNNER_TEMP/docsy-release.jks" >> "$GITHUB_ENV"
-            echo "KEYSTORE_PASSWORD=$(clean "$KS_PASS")" >> "$GITHUB_ENV"
-            echo "KEY_ALIAS=$(clean "$KS_ALIAS")" >> "$GITHUB_ENV"
-            echo "KEY_PASSWORD=$(clean "$KS_KEYPASS")" >> "$GITHUB_ENV"
+          if [ -z "$KS_B64" ]; then
+            echo "::warning title=No signing key::KEYSTORE_BASE64 secret is not set. The release APK will be debug-signed."
+            exit 0
+          fi
+          KS="$RUNNER_TEMP/doxsy-release.jks"
+          printf '%s' "$KS_B64" | LC_ALL=C tr -cd 'A-Za-z0-9+/=' | base64 -d > "$KS" 2>/dev/null || true
+          PASS=$(clean "$KS_PASS")
+          ALIAS=$(clean "$KS_ALIAS")
+          echo "Secret check: KEYSTORE_BASE64=${#KS_B64} chars, KEYSTORE_PASSWORD=${#PASS} chars, KEY_ALIAS=${#ALIAS} chars"
+          if keytool -list -keystore "$KS" -storepass "$PASS" -alias "$ALIAS" > /dev/null 2>&1; then
+            echo "Signing key verified."
+            {
+              echo "KEYSTORE_FILE=$KS"
+              echo "KEYSTORE_PASSWORD=$PASS"
+              echo "KEY_ALIAS=$ALIAS"
+              echo "KEY_PASSWORD=$PASS"
+            } >> "$GITHUB_ENV"
           else
-            echo "::warning::KEYSTORE_BASE64 secret not set - release APK will be debug-signed"
+            echo "::warning title=Signing key rejected::keytool could not open the keystore with the given secrets (wrong KEYSTORE_PASSWORD or KEY_ALIAS, or KEYSTORE_BASE64 was not copied completely). Building with the debug key instead. Fix the secrets and re-run."
           fi
 
-      - name: Build release + debug APK
+      - name: Firebase config (google-services.json from repository secret)
+        env:
+          GS_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -n "$GS_JSON" ]; then
+            printf '%s' "$GS_JSON" > "$PROJ/app/google-services.json"
+            echo "google-services.json written from the GOOGLE_SERVICES_JSON secret."
+          elif [ -f "$PROJ/app/google-services.json" ]; then
+            echo "Using app/google-services.json from the project."
+          else
+            echo "::warning title=Firebase not configured::No GOOGLE_SERVICES_JSON secret and no app/google-services.json. The app builds, but Google sign-in is switched off."
+          fi
+
+      - name: Show signing SHA-1 (add it to Firebase and Google Cloud)
+        run: |
+          if [ -n "$KEYSTORE_FILE" ] && [ -f "$KEYSTORE_FILE" ]; then
+            echo "Release key SHA-1 / SHA-256 (public fingerprints, safe to copy):"
+            keytool -list -v -keystore "$KEYSTORE_FILE" -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" 2>/dev/null | grep -E "SHA1|SHA256" || true
+          else
+            echo "::warning title=Debug-signed::The APK is signed with a temporary debug key, so Google sign-in cannot match a SHA-1. Set the KEYSTORE secrets."
+          fi
+
+      - name: Build release APK
         working-directory: ${{ env.PROJ }}
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease assembleDebug --no-daemon --stacktrace
+          ./gradlew assembleRelease --no-daemon --stacktrace
 
       - name: Collect APKs
         run: |
           mkdir -p out
-          cp "$PROJ"/app/build/outputs/apk/release/*.apk out/Docsy-release.apk
-          cp "$PROJ"/app/build/outputs/apk/debug/*.apk out/Docsy-debug.apk
+          cp "$PROJ"/app/build/outputs/apk/release/*.apk out/Doxsy-release.apk
           ls -la out
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Docsy-APKs
+          name: Doxsy-APKs
           path: out/*.apk
 
       - name: Publish GitHub Release
@@ -91,5 +122,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "build-${{ github.run_number }}" out/*.apk \
-            --title "Docsy build ${{ github.run_number }}" \
-            --notes "Signed release APK (Docsy-release.apk) and debug APK."
+            --title "Doxsy build ${{ github.run_number }}" \
+            --notes "Signed release APK (Doxsy-release.apk)."
